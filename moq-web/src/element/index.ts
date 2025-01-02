@@ -1,2 +1,2 @@
-import "./karp";
-import "./video";
+import MoqVideoElement from "./video";
+export { MoqVideoElement };

@@ -1,4 +1,4 @@
-name: Publish NPM Package
+name: NPM
 
 on:
   push:
@@ -7,48 +7,29 @@ on:
 
 jobs:
   release:
+    name: Release
+
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate GitHub token
-        uses: actions/create-github-app-token@v1
-        id: generate-token
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+      - uses: actions/setup-node@v4
 
       - name: Update NPM version
         run: |
           VERSION=${GITHUB_REF#refs/tags/moq-web-v}
           jq ".version=\"$VERSION\"" package.json > temp.json && mv temp.json package.json
 
-      - name: Build/Publish NPM Package
+      - name: Authenticate with npm
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          bun install
-          bun pack
-          bun publish
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
 
-      - name: Trigger quic.video update
-        env:
-          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
+      - name: Build/Publish NPM Package
         run: |
-          VERSION=${GITHUB_REF#refs/tags/moq-web-v}
-          curl -X POST \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/kixelated/quic.video/actions/workflows/update.yml/dispatches \
-            -d "$(jq -n --arg version "$VERSION" '{
-              ref: "main",
-              inputs: {
-                npm_version: $version
-              }
-            }')"
+          npm install
+          npm run build
+          npm publish --access public

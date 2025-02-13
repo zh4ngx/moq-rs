@@ -6,6 +6,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.21](https://github.com/kixelated/moq-rs/compare/moq-relay-v0.6.20...moq-relay-v0.6.21) - 2025-01-30
+
+### Other
+
+- update Cargo.toml dependencies
+
+## [0.6.20](https://github.com/kixelated/moq-rs/compare/moq-relay-v0.6.19...moq-relay-v0.6.20) - 2025-01-24
+
+### Other
+
+- Add initial <moq-meet> element ([#302](https://github.com/kixelated/moq-rs/pull/302))
+
+## [0.6.18](https://github.com/kixelated/moq-rs/compare/moq-relay-v0.6.17...moq-relay-v0.6.18) - 2025-01-16
+
+### Other
+
+- Retry connections to cluster nodes ([#290](https://github.com/kixelated/moq-rs/pull/290))
+- Support fetching fingerprint via native clients. ([#286](https://github.com/kixelated/moq-rs/pull/286))
+- Initial WASM contribute ([#283](https://github.com/kixelated/moq-rs/pull/283))
+
+## [0.6.17](https://github.com/kixelated/moq-rs/compare/moq-relay-v0.6.16...moq-relay-v0.6.17) - 2025-01-13
+
+### Other
+
+- Revert some questionable changes. ([#281](https://github.com/kixelated/moq-rs/pull/281))
+
+## [0.6.16](https://github.com/kixelated/moq-rs/compare/moq-relay-v0.6.15...moq-relay-v0.6.16) - 2025-01-13
+
+### Other
+
+- Fix clustering. ([#280](https://github.com/kixelated/moq-rs/pull/280))
+
 ## [0.6.15](https://github.com/kixelated/moq-rs/compare/moq-relay-v0.6.14...moq-relay-v0.6.15) - 2024-12-24
 
 ### Added

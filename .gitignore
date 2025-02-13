@@ -10,9 +10,9 @@
 
 # Build stuff
 node_modules
-pkg
 target
 dist
+pkg
 
 # Don't leak dev stuff
 *.mp4
@@ -20,6 +20,11 @@ dist
 *.crt
 *.key
 *.hex
+
+# We're using npm
+bun.lockb
+yarn.lock
+pnpm-lock.yaml
 
 result
 

@@ -1,96 +1,144 @@
 use crate::{Audio, Catalog, Error, Result, Track, TrackConsumer, TrackProducer, Video};
 
+use moq_async::{spawn, Lock};
 use moq_transfork::{Announced, AnnouncedConsumer, Path, Session};
 
 use derive_more::Debug;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[debug("{:?}", path)]
 pub struct BroadcastProducer {
 	pub session: Session,
 	pub path: Path,
-	id: u128,
-
-	catalog: Catalog,
-	catalog_producer: moq_transfork::TrackProducer, // need to hold the track to keep it open
+	id: u64,
+	catalog: Lock<CatalogProducer>,
 }
 
 impl BroadcastProducer {
 	pub fn new(mut session: Session, path: Path) -> Result<Self> {
 		// Generate a "unique" ID for this broadcast session.
 		// If we crash, then the viewers will automatically reconnect to the new ID.
-		let id = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
+		let id = web_time::SystemTime::now()
+			.duration_since(web_time::SystemTime::UNIX_EPOCH)
 			.unwrap()
-			.as_millis();
+			.as_millis() as u64;
 
 		let full = path.clone().push(id);
 
-		let track = moq_transfork::Track {
+		let catalog = moq_transfork::Track {
 			path: full,
 			priority: -1,
-			group_order: moq_transfork::GroupOrder::Desc,
-			group_expires: std::time::Duration::ZERO,
+			order: moq_transfork::GroupOrder::Desc,
 		}
 		.produce();
 
-		session.publish(track.1)?;
+		// Publish the catalog track, even if it's empty.
+		session.publish(catalog.1)?;
+
+		let catalog = Lock::new(CatalogProducer::new(catalog.0)?);
 
 		Ok(Self {
 			session,
 			path,
 			id,
-			catalog: Catalog::default(),
-			catalog_producer: track.0,
+			catalog,
 		})
 	}
 
-	pub fn video(&mut self, info: Video) -> Result<TrackProducer> {
+	/// Return the latest catalog.
+	pub fn catalog(&self) -> Catalog {
+		self.catalog.lock().current.clone()
+	}
+
+	pub fn publish_video(&mut self, info: Video) -> Result<TrackProducer> {
 		let path = self.path.clone().push(self.id).push(&info.track.name);
 
 		let (producer, consumer) = moq_transfork::Track {
 			path,
 			priority: info.track.priority,
 			// TODO add these to the catalog and support higher latencies.
-			group_order: moq_transfork::GroupOrder::Desc,
-			group_expires: std::time::Duration::ZERO,
+			order: moq_transfork::GroupOrder::Desc,
 		}
 		.produce();
 
 		self.session.publish(consumer)?;
-		self.catalog.video.push(info);
-		self.update()?;
 
-		Ok(TrackProducer::new(producer))
+		let mut catalog = self.catalog.lock();
+		catalog.current.video.push(info.clone());
+		catalog.publish()?;
+
+		let producer = TrackProducer::new(producer);
+		let consumer = producer.subscribe();
+
+		// Start a task that will remove the catalog on drop.
+		let catalog = self.catalog.clone();
+		spawn(async move {
+			consumer.closed().await.ok();
+
+			let mut catalog = catalog.lock();
+			catalog.current.video.retain(|v| v.track != info.track);
+			catalog.publish().unwrap();
+		});
+
+		Ok(producer)
 	}
 
-	pub fn audio(&mut self, info: Audio) -> Result<TrackProducer> {
+	pub fn publish_audio(&mut self, info: Audio) -> Result<TrackProducer> {
 		let path = self.path.clone().push(self.id).push(&info.track.name);
 
 		let (producer, consumer) = moq_transfork::Track {
 			path,
 			priority: info.track.priority,
 			// TODO add these to the catalog and support higher latencies.
-			group_order: moq_transfork::GroupOrder::Desc,
-			group_expires: std::time::Duration::ZERO,
+			order: moq_transfork::GroupOrder::Desc,
 		}
 		.produce();
 
 		self.session.publish(consumer)?;
-		self.catalog.audio.push(info);
-		self.update()?;
 
-		Ok(TrackProducer::new(producer))
+		let mut catalog = self.catalog.lock();
+		catalog.current.audio.push(info.clone());
+		catalog.publish()?;
+
+		let producer = TrackProducer::new(producer);
+		let consumer = producer.subscribe();
+
+		// Start a task that will remove the catalog on drop.
+		let catalog = self.catalog.clone();
+		spawn(async move {
+			consumer.closed().await.ok();
+
+			let mut catalog = catalog.lock();
+			catalog.current.audio.retain(|v| v.track != info.track);
+			catalog.publish().unwrap();
+		});
+
+		Ok(producer)
+	}
+}
+
+struct CatalogProducer {
+	current: Catalog,
+	track: moq_transfork::TrackProducer,
+}
+
+impl CatalogProducer {
+	fn new(track: moq_transfork::TrackProducer) -> Result<Self> {
+		let mut this = Self {
+			current: Catalog::default(),
+			track,
+		};
+
+		// Perform the initial publish
+		this.publish()?;
+
+		Ok(this)
 	}
 
-	pub fn catalog(&self) -> &Catalog {
-		&self.catalog
-	}
+	fn publish(&mut self) -> Result<()> {
+		let frame = self.current.to_string()?;
 
-	fn update(&mut self) -> Result<()> {
-		let frame = self.catalog.to_string()?;
-
-		let mut group = self.catalog_producer.append_group();
+		let mut group = self.track.append_group();
 		group.write_frame(frame);
 
 		Ok(())
@@ -110,30 +158,43 @@ pub struct BroadcastConsumer {
 	// The ID of the current broadcast
 	current: Option<String>,
 
+	// True if we should None because the broadcast has ended.
+	ended: bool,
+
+	catalog_latest: Option<Catalog>,
 	catalog_track: Option<moq_transfork::TrackConsumer>,
 	catalog_group: Option<moq_transfork::GroupConsumer>,
 }
 
 impl BroadcastConsumer {
 	pub fn new(session: Session, path: Path) -> Self {
-		let announced = session.announced_prefix(path.clone());
+		let announced = session.announced(path.clone());
 
 		Self {
 			session,
 			path,
 			announced,
 			current: None,
+			ended: false,
+			catalog_latest: None,
 			catalog_track: None,
 			catalog_group: None,
 		}
 	}
 
-	/// Returns the latest catalog, or None if the broadcast has ended.
-	// TODO Make a new interface instead of returning the catalog directly.
-	// Otherwise, consumers won't realize that the underlying tracks are completely different.
-	// ex. "video" on the old session !== "video" on the new session
-	pub async fn catalog(&mut self) -> Result<Option<Catalog>> {
+	pub fn catalog(&self) -> Option<&Catalog> {
+		self.catalog_latest.as_ref()
+	}
+
+	/// Returns the latest catalog, or None if the channel is offline.
+	pub async fn next_catalog(&mut self) -> Result<Option<&Catalog>> {
 		loop {
+			if self.ended {
+				// Avoid returning None again.
+				self.ended = false;
+				return Ok(None);
+			}
+
 			tokio::select! {
 				biased;
 				// Wait for new announcements.
@@ -144,7 +205,9 @@ impl BroadcastConsumer {
 						Announced::Ended(suffix) => self.unload(suffix),
 						Announced::Live => {
 							// Return None if we're caught up to live with no broadcast.
-							if self.current.is_none() { return Ok(None) }
+							if self.current.is_none() {
+								return Ok(None)
+							}
 						},
 					}
 				},
@@ -153,11 +216,11 @@ impl BroadcastConsumer {
 					self.catalog_group.replace(group?);
 				},
 				Some(frame) = async { self.catalog_group.as_mut()?.read_frame().await.transpose() } => {
-					let catalog = Catalog::from_slice(&frame?)?;
+					self.catalog_latest = Some(Catalog::from_slice(&frame?)?);
 					self.catalog_group.take(); // We don't support deltas yet
-					return Ok(Some(catalog));
+					return Ok(self.catalog_latest.as_ref());
 				},
-				else => return Ok(None),
+				else => return Err(self.session.closed().await.into()),
 			}
 		}
 	}
@@ -184,8 +247,7 @@ impl BroadcastConsumer {
 		let track = moq_transfork::Track {
 			path,
 			priority: -1,
-			group_order: moq_transfork::GroupOrder::Desc,
-			group_expires: std::time::Duration::ZERO,
+			order: moq_transfork::GroupOrder::Desc,
 		};
 
 		self.catalog_track = Some(self.session.subscribe(track));
@@ -202,6 +264,7 @@ impl BroadcastConsumer {
 			self.current = None;
 			self.catalog_track = None;
 			self.catalog_group = None;
+			self.ended = true;
 		}
 	}
 
@@ -214,8 +277,7 @@ impl BroadcastConsumer {
 			priority: track.priority,
 
 			// TODO add these to the catalog and support higher latencies.
-			group_order: moq_transfork::GroupOrder::Desc,
-			group_expires: std::time::Duration::ZERO,
+			order: moq_transfork::GroupOrder::Desc,
 		};
 
 		let track = self.session.subscribe(track);

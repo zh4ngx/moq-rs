@@ -1,8 +1,8 @@
 use std::fmt;
 
-use crate::util::Close;
-use crate::Error;
-use crate::{coding::*, message};
+use crate::{coding::*, message, Error};
+
+use moq_async::Close;
 
 pub(super) struct Writer {
 	stream: web_transport::SendStream,
@@ -41,9 +41,13 @@ impl Writer {
 		self.stream.write(buf).await?; // convert the error type
 		Ok(())
 	}
+
+	pub fn set_priority(&mut self, priority: i32) {
+		self.stream.set_priority(priority);
+	}
 }
 
-impl Close for Writer {
+impl Close<Error> for Writer {
 	fn close(&mut self, err: Error) {
 		self.stream.reset(err.to_code());
 	}

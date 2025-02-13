@@ -6,6 +6,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/kixelated/moq-rs/compare/moq-transfork-v0.9.0...moq-transfork-v0.10.0) - 2025-01-30
+
+### Other
+
+- Misc fixes and changes. ([#317](https://github.com/kixelated/moq-rs/pull/317))
+- Plane UI work ([#316](https://github.com/kixelated/moq-rs/pull/316))
+
+## [0.9.0](https://github.com/kixelated/moq-rs/compare/moq-transfork-v0.8.3...moq-transfork-v0.9.0) - 2025-01-24
+
+### Other
+
+- Meet status and various fixes ([#310](https://github.com/kixelated/moq-rs/pull/310))
+- Remove group expires. ([#303](https://github.com/kixelated/moq-rs/pull/303))
+- Add initial <moq-meet> element ([#302](https://github.com/kixelated/moq-rs/pull/302))
+- Update some repo URLs. ([#299](https://github.com/kixelated/moq-rs/pull/299))
+
+## [0.8.3](https://github.com/kixelated/moq-rs/compare/moq-transfork-v0.8.2...moq-transfork-v0.8.3) - 2025-01-16
+
+### Other
+
+- Retry connections to cluster nodes ([#290](https://github.com/kixelated/moq-rs/pull/290))
+- Initial WASM contribute ([#283](https://github.com/kixelated/moq-rs/pull/283))
+
+## [0.8.2](https://github.com/kixelated/moq-rs/compare/moq-transfork-v0.8.1...moq-transfork-v0.8.2) - 2025-01-13
+
+### Other
+
+- Revert some questionable changes. ([#281](https://github.com/kixelated/moq-rs/pull/281))
+
+## [0.8.1](https://github.com/kixelated/moq-rs/compare/moq-transfork-v0.8.0...moq-transfork-v0.8.1) - 2025-01-13
+
+### Other
+
+- Fix clustering. ([#280](https://github.com/kixelated/moq-rs/pull/280))
+- Replace mkcert with rcgen* ([#273](https://github.com/kixelated/moq-rs/pull/273))
+
 ## [0.8.0](https://github.com/kixelated/moq-rs/compare/moq-transfork-v0.7.0...moq-transfork-v0.8.0) - 2024-12-12
 
 ### Other

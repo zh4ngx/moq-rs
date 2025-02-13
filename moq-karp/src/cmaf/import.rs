@@ -1,12 +1,10 @@
 use bytes::{Bytes, BytesMut};
 use mp4_atom::{Any, AsyncReadFrom, Atom, DecodeMaybe, Esds, Mdat, Moof, Moov, Tfdt, Trak, Trun};
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::{Error, Result};
-use crate::{
-	Audio, BroadcastProducer, Catalog, Dimensions, Frame, Timestamp, Track, TrackProducer, Video, AAC, H264, VP9,
-};
+use crate::{Audio, BroadcastProducer, Dimensions, Frame, Timestamp, Track, TrackProducer, Video, AAC, H264, VP9};
 
 /// Converts fMP4 -> Karp
 pub struct Import {
@@ -85,11 +83,11 @@ impl Import {
 			let track = match handler.as_ref() {
 				b"vide" => {
 					let track = Self::init_video(trak)?;
-					self.broadcast.video(track)?
+					self.broadcast.publish_video(track)?
 				}
 				b"soun" => {
 					let track = Self::init_audio(trak)?;
-					self.broadcast.audio(track)?
+					self.broadcast.publish_audio(track)?
 				}
 				b"sbtl" => return Err(Error::UnsupportedTrack("subtitle")),
 				_ => return Err(Error::UnsupportedTrack("unknown")),
@@ -116,8 +114,8 @@ impl Import {
 			Video {
 				track: Track { name, priority: 2 },
 				resolution: Dimensions {
-					width: avc1.width,
-					height: avc1.height,
+					width: avc1.width as _,
+					height: avc1.height as _,
 				},
 				codec: H264 {
 					profile: avcc.avc_profile_indication,
@@ -125,7 +123,7 @@ impl Import {
 					level: avcc.avc_level_indication,
 				}
 				.into(),
-				description: description.freeze(),
+				description: Some(description.freeze()),
 				bitrate: None,
 			}
 		} else if let Some(hev1) = &stsd.hev1 {
@@ -169,8 +167,8 @@ impl Import {
 				.into(),
 				description: Default::default(),
 				resolution: Dimensions {
-					width: vp09.width,
-					height: vp09.height,
+					width: vp09.width as _,
+					height: vp09.height as _,
 				},
 				bitrate: None,
 			}
@@ -205,9 +203,9 @@ impl Import {
 					profile: desc.dec_specific.profile,
 				}
 				.into(),
-				sample_rate: mp4a.samplerate.integer(),
-				channel_count: mp4a.channelcount,
-				bitrate: Some(std::cmp::max(desc.avg_bitrate, desc.max_bitrate)),
+				sample_rate: mp4a.samplerate.integer() as _,
+				channel_count: mp4a.channelcount as _,
+				bitrate: Some(std::cmp::max(desc.avg_bitrate, desc.max_bitrate) as _),
 			}
 		} else {
 			return Err(Error::UnsupportedCodec("unknown"));
@@ -308,7 +306,7 @@ impl Import {
 
 			let tfdt = traf.tfdt.as_ref().ok_or(Error::MissingBox(Tfdt::KIND))?;
 			let mut dts = tfdt.base_media_decode_time;
-			let timescale = trak.mdia.mdhd.timescale;
+			let timescale = trak.mdia.mdhd.timescale as u64;
 
 			let mut offset = tfhd.base_data_offset.unwrap_or_default() as usize;
 
@@ -335,8 +333,8 @@ impl Import {
 					.size
 					.unwrap_or(tfhd.default_sample_size.unwrap_or(default_sample_size)) as usize;
 
-				let pts = dts as i64 + entry.cts.unwrap_or_default() as i64;
-				let timestamp = Timestamp::from_units(pts as u64, timescale as _);
+				let pts = (dts as i64 + entry.cts.unwrap_or_default() as i64) as u64;
+				let timestamp = Timestamp::from_micros(1_000_000 * pts / timescale);
 
 				if offset + size > mdat.len() {
 					return Err(Error::InvalidOffset);
@@ -360,7 +358,7 @@ impl Import {
 				} else {
 					match self.last_keyframe.get(&track_id) {
 						// Force an audio keyframe at least every 10 seconds, but ideally at video keyframes
-						Some(prev) => timestamp - *prev > Timestamp::from_seconds(10),
+						Some(prev) => timestamp - *prev > Duration::from_secs(10),
 						None => true,
 					}
 				};
@@ -393,15 +391,11 @@ impl Import {
 		if let (Some(min), Some(max)) = (min_timestamp, max_timestamp) {
 			let diff = max - min;
 
-			if diff > Timestamp::from_millis(1) {
+			if diff > Duration::from_millis(1) {
 				tracing::warn!("fMP4 introduced {:?} of latency", diff);
 			}
 		}
 
 		Ok(())
-	}
-
-	pub fn catalog(&self) -> &Catalog {
-		self.broadcast.catalog()
 	}
 }

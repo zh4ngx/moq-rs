@@ -1,8 +1,6 @@
-use crate::{
-	message,
-	util::{spawn, Close, OrClose},
-	AnnouncedConsumer, Error, Path, RouterConsumer, Track, TrackConsumer,
-};
+use crate::{message, AnnouncedConsumer, Error, Path, RouterConsumer, Track, TrackConsumer};
+
+use moq_async::{spawn, Close, OrClose};
 
 mod publisher;
 mod reader;
@@ -46,7 +44,7 @@ impl Session {
 			};
 
 			if let Err(err) = res {
-				tracing::warn!(?err, "closing session");
+				tracing::warn!(?err, "terminated");
 				session.close(err.to_code(), &err.to_string());
 			}
 		});
@@ -55,7 +53,8 @@ impl Session {
 	}
 
 	/// Perform the MoQ handshake as a client.
-	pub async fn connect(mut session: web_transport::Session) -> Result<Self, Error> {
+	pub async fn connect<T: Into<web_transport::Session>>(session: T) -> Result<Self, Error> {
+		let mut session = session.into();
 		let mut stream = Stream::open(&mut session, message::ControlType::Session).await?;
 		Self::connect_setup(&mut stream).await.or_close(&mut stream)?;
 		Ok(Self::new(session, stream))
@@ -76,7 +75,8 @@ impl Session {
 	}
 
 	/// Perform the MoQ handshake as a server
-	pub async fn accept(mut session: web_transport::Session) -> Result<Self, Error> {
+	pub async fn accept<T: Into<web_transport::Session>>(session: T) -> Result<Self, Error> {
+		let mut session = session.into();
 		let mut stream = Stream::accept(&mut session).await?;
 		let kind = stream.reader.decode().await?;
 
@@ -177,13 +177,8 @@ impl Session {
 		self.subscriber.subscribe(track)
 	}
 
-	/// Discover any tracks published by the remote.
-	pub fn announced(&self) -> AnnouncedConsumer {
-		self.announced_prefix(Path::default())
-	}
-
 	/// Discover any tracks published by the remote matching a prefix.
-	pub fn announced_prefix(&self, prefix: Path) -> AnnouncedConsumer {
+	pub fn announced(&self, prefix: Path) -> AnnouncedConsumer {
 		self.subscriber.announced(prefix)
 	}
 

@@ -1,18 +1,14 @@
-mod decoder;
+mod connection;
 mod error;
-//mod publish;
-mod renderer;
-mod run;
-mod session;
+mod meet;
+mod publish;
 mod watch;
 
+pub use connection::*;
 pub use error::*;
-//pub use publish::*;
+pub use meet::*;
+pub use publish::*;
 pub use watch::*;
-
-use decoder::*;
-use renderer::*;
-use run::*;
 
 use wasm_bindgen::prelude::*;
 
@@ -23,7 +19,7 @@ pub fn start() {
 	console_error_panic_hook::set_once();
 
 	let config = wasm_tracing::WASMLayerConfigBuilder::new()
-		.set_max_level(tracing::Level::DEBUG)
+		.set_max_level(tracing::Level::INFO)
 		.build();
 	wasm_tracing::set_as_global_default_with_config(config);
 }

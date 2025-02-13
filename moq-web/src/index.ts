@@ -1,9 +1,6 @@
-// Export the library
 export { Watch } from "./watch";
+export { Publish } from "./publish";
+export { Meet } from "./meet";
 
-// NOTE: You can also use the custom elements
-// They are in a separate path since they require side-effects to function fully.
-// import "@kixelated/moq/video"
-
-// We still export them here for convenience
-export { MoqVideoElement } from "./element";
+// NOTE: We don't export any custom elements or UIs
+// You have to import those folders specifically due to tree-shaking.

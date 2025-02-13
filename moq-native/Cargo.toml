@@ -5,22 +5,25 @@ authors = ["Luke Curley"]
 repository = "https://github.com/kixelated/moq-rs"
 license = "MIT OR Apache-2.0"
 
-version = "0.5.10"
+version = "0.6.5"
 edition = "2021"
 
 keywords = ["quic", "http3", "webtransport", "media", "live"]
 categories = ["multimedia", "network-programming", "web-programming"]
 
 [dependencies]
-moq-transfork = { path = "../moq-transfork", version = "0.8" }
+moq-transfork = { path = "../moq-transfork", version = "0.10" }
 web-transport = { workspace = true }
 
-rustls = { version = "0.23", features = ["ring"] }
+rustls = "0.23"
 rustls-pemfile = "2"
 rustls-native-certs = "0.8"
-quinn = { version = "0.11", features = ["ring"] }
+quinn = "0.11"
 ring = "0.17"
 webpki = "0.22"
+rcgen = "0.13"
+time = "0.3"
+reqwest = { version = "0.12", default-features = false }
 
 hex = "0.4"
 url = "2"

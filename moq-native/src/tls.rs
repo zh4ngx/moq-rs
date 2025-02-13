@@ -1,7 +1,8 @@
 use anyhow::Context;
 use clap::Parser;
 use ring::digest::{digest, SHA256};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::crypto::ring::sign::any_supported_type;
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 use rustls::RootCertStore;
@@ -18,20 +19,20 @@ pub struct Args {
 	/// You can use this option multiple times for multiple certificates.
 	/// The first match for the provided SNI will be used, otherwise the last cert will be used.
 	/// You also need to provide the private key multiple times via `key``.
-	#[arg(long = "tls-cert")]
+	#[arg(long = "tls-cert", value_delimiter = ',')]
 	pub cert: Vec<path::PathBuf>,
 
 	/// Use the private key at this path, encoded as PEM.
 	///
 	/// There must be a key for every certificate provided via `cert`.
-	#[arg(long = "tls-key")]
+	#[arg(long = "tls-key", value_delimiter = ',')]
 	pub key: Vec<path::PathBuf>,
 
 	/// Use the TLS root at this path, encoded as PEM.
 	///
 	/// This value can be provided multiple times for multiple roots.
 	/// If this is empty, system roots will be used instead
-	#[arg(long = "tls-root")]
+	#[arg(long = "tls-root", value_delimiter = ',')]
 	pub root: Vec<path::PathBuf>,
 
 	/// Danger: Disable TLS certificate verification.
@@ -39,6 +40,13 @@ pub struct Args {
 	/// Fine for local development and between relays, but should be used in caution in production.
 	#[arg(long = "tls-disable-verify")]
 	pub disable_verify: bool,
+
+	/// Generate a self-signed certificate for the provided hostnames (comma separated).
+	///
+	/// This is useful for local development and testing.
+	/// This can be combined with the `/fingerprint` endpoint for clients to fetch the fingerprint.
+	#[arg(long = "tls-self-sign", value_delimiter = ',')]
+	pub self_sign: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -50,7 +58,7 @@ pub struct Config {
 
 impl Args {
 	pub fn load(&self) -> anyhow::Result<Config> {
-		let provider = Arc::new(rustls::crypto::ring::default_provider());
+		let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
 		let mut serve = ServeCerts::default();
 
 		// Load the certificate and key files based on their index.
@@ -60,6 +68,10 @@ impl Args {
 		);
 		for (chain, key) in self.cert.iter().zip(self.key.iter()) {
 			serve.load(chain, key)?;
+		}
+
+		if !self.self_sign.is_empty() {
+			serve.generate(&self.self_sign)?;
 		}
 
 		// Create a list of acceptable root certificates.
@@ -100,6 +112,8 @@ impl Args {
 
 		// Allow disabling TLS verification altogether.
 		if self.disable_verify {
+			tracing::warn!("TLS server certificate verification is disabled");
+
 			let noop = NoCertificateVerification(provider.clone());
 			client.dangerous().set_certificate_verifier(Arc::new(noop));
 		}
@@ -107,7 +121,7 @@ impl Args {
 		let fingerprints = serve.fingerprints();
 
 		// Create the TLS configuration we'll use as a server (relay <- browser)
-		let server = if !self.key.is_empty() {
+		let server = if !serve.list.is_empty() {
 			Some(
 				rustls::ServerConfig::builder_with_provider(provider)
 					.with_protocol_versions(&[&rustls::version::TLS13])?
@@ -156,6 +170,30 @@ impl ServeCerts {
 
 		let certified = Arc::new(CertifiedKey::new(chain, key));
 		self.list.push(certified);
+
+		Ok(())
+	}
+
+	pub fn generate(&mut self, hostnames: &[String]) -> anyhow::Result<()> {
+		let key_pair = rcgen::KeyPair::generate()?;
+
+		let mut params = rcgen::CertificateParams::new(hostnames)?;
+
+		// Make the certificate valid for two weeks, starting yesterday (in case of clock drift).
+		// WebTransport certificates MUST be valid for two weeks at most.
+		params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+		params.not_after = params.not_before + time::Duration::days(14);
+
+		// Generate the certificate
+		let cert = params.self_signed(&key_pair)?;
+
+		// Convert the rcgen type to the rustls type.
+		let key = PrivatePkcs8KeyDer::from(key_pair.serialized_der());
+		let key = any_supported_type(&key.into())?;
+
+		// Create a rustls::sign::CertifiedKey
+		let certified = CertifiedKey::new(vec![cert.into()], key);
+		self.list.push(Arc::new(certified));
 
 		Ok(())
 	}
@@ -230,5 +268,58 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
 
 	fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
 		self.0.signature_verification_algorithms.supported_schemes()
+	}
+}
+
+// Verify the certificate matches a provided fingerprint.
+#[derive(Debug)]
+pub struct FingerprintVerifier {
+	provider: Arc<rustls::crypto::CryptoProvider>,
+	fingerprint: Vec<u8>,
+}
+
+impl FingerprintVerifier {
+	pub fn new(provider: Arc<rustls::crypto::CryptoProvider>, fingerprint: Vec<u8>) -> Self {
+		Self { provider, fingerprint }
+	}
+}
+
+impl rustls::client::danger::ServerCertVerifier for FingerprintVerifier {
+	fn verify_server_cert(
+		&self,
+		end_entity: &CertificateDer<'_>,
+		_intermediates: &[CertificateDer<'_>],
+		_server_name: &ServerName<'_>,
+		_ocsp: &[u8],
+		_now: UnixTime,
+	) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+		let fingerprint = digest(&SHA256, end_entity);
+		if fingerprint.as_ref() == self.fingerprint.as_slice() {
+			Ok(rustls::client::danger::ServerCertVerified::assertion())
+		} else {
+			Err(rustls::Error::General("fingerprint mismatch".into()))
+		}
+	}
+
+	fn verify_tls12_signature(
+		&self,
+		message: &[u8],
+		cert: &CertificateDer<'_>,
+		dss: &rustls::DigitallySignedStruct,
+	) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+		rustls::crypto::verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+	}
+
+	fn verify_tls13_signature(
+		&self,
+		message: &[u8],
+		cert: &CertificateDer<'_>,
+		dss: &rustls::DigitallySignedStruct,
+	) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+		rustls::crypto::verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+	}
+
+	fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+		self.provider.signature_verification_algorithms.supported_schemes()
 	}
 }

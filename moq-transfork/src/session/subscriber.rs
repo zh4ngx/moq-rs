@@ -6,9 +6,10 @@ use std::{
 use crate::{
 	message,
 	model::{Track, TrackConsumer},
-	util::{spawn, Lock, OrClose},
 	AnnouncedProducer, Error, Path, TrackProducer,
 };
+
+use moq_async::{spawn, Lock, OrClose};
 
 use super::{AnnouncedConsumer, Reader, Stream};
 
@@ -47,10 +48,12 @@ impl Subscriber {
 				}
 			};
 
-			Self::run_announce(&mut stream, prefix, producer)
+			if let Err(err) = Self::run_announce(&mut stream, prefix, producer)
 				.await
 				.or_close(&mut stream)
-				.ok();
+			{
+				tracing::warn!(?err, "announced error");
+			}
 		});
 
 		consumer
@@ -101,7 +104,6 @@ impl Subscriber {
 				}
 			}
 			message::Announce::Live => {
-				tracing::debug!("live");
 				announced.live();
 			}
 		};
@@ -125,10 +127,9 @@ impl Subscriber {
 
 		spawn(async move {
 			if let Ok(mut stream) = Stream::open(&mut this.session, message::ControlType::Subscribe).await {
-				this.run_subscribe(id, writer, &mut stream)
-					.await
-					.or_close(&mut stream)
-					.ok();
+				if let Err(err) = this.run_subscribe(id, writer, &mut stream).await.or_close(&mut stream) {
+					tracing::warn!(?err, "subscribe error");
+				}
 			}
 
 			this.subscribes.lock().remove(&id);
@@ -147,8 +148,7 @@ impl Subscriber {
 			path: track.path.clone(),
 			priority: track.priority,
 
-			group_order: track.group_order,
-			group_expires: track.group_expires,
+			group_order: track.order,
 
 			// TODO
 			group_min: None,
@@ -158,9 +158,9 @@ impl Subscriber {
 		stream.writer.encode(&request).await?;
 
 		// TODO use the response to correctly populate the track info
-		let _response: message::Info = stream.reader.decode().await?;
+		let info: message::Info = stream.reader.decode().await?;
 
-		tracing::info!("subscribed");
+		tracing::info!(?info, "active");
 
 		loop {
 			tokio::select! {
@@ -194,8 +194,8 @@ impl Subscriber {
 		let mut group = {
 			let mut subs = self.subscribes.lock();
 			let track = subs.get_mut(&group.subscribe).ok_or(Error::Cancel)?;
-			let group = track.create_group(group.sequence);
-			group
+
+			track.create_group(group.sequence)
 		};
 
 		while let Some(frame) = stream.decode_maybe::<message::Frame>().await? {

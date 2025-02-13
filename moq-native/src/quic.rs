@@ -10,6 +10,8 @@ use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 
+use web_transport::quinn as web_transport_quinn;
+
 #[derive(Parser, Clone)]
 pub struct Args {
 	/// Listen for UDP packets on the given address.
@@ -51,7 +53,7 @@ impl Endpoint {
 		// Enable BBR congestion control
 		// TODO validate the implementation
 		let mut transport = quinn::TransportConfig::default();
-		transport.max_idle_timeout(Some(time::Duration::from_secs(10).try_into().unwrap()));
+		transport.max_idle_timeout(Some(time::Duration::from_secs(9).try_into().unwrap()));
 		transport.keep_alive_interval(Some(time::Duration::from_secs(4))); // TODO make this smarter
 		transport.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
 		transport.mtu_discovery_config(None); // Disable MTU discovery
@@ -96,11 +98,11 @@ impl Endpoint {
 
 pub struct Server {
 	quic: quinn::Endpoint,
-	accept: FuturesUnordered<BoxFuture<'static, anyhow::Result<web_transport::Session>>>,
+	accept: FuturesUnordered<BoxFuture<'static, anyhow::Result<web_transport_quinn::Session>>>,
 }
 
 impl Server {
-	pub async fn accept(&mut self) -> Option<web_transport::Session> {
+	pub async fn accept(&mut self) -> Option<web_transport_quinn::Session> {
 		loop {
 			tokio::select! {
 				res = self.quic.accept() => {
@@ -116,7 +118,7 @@ impl Server {
 		}
 	}
 
-	async fn accept_session(conn: quinn::Incoming) -> anyhow::Result<web_transport::Session> {
+	async fn accept_session(conn: quinn::Incoming) -> anyhow::Result<web_transport_quinn::Session> {
 		let mut conn = conn.accept()?;
 
 		let handshake = conn
@@ -129,7 +131,7 @@ impl Server {
 		let alpn = String::from_utf8(alpn).context("failed to decode ALPN")?;
 		let host = handshake.server_name.unwrap_or_default();
 
-		tracing::debug!(%host, ip = %conn.remote_address(), %alpn, "connecting");
+		tracing::debug!(%host, ip = %conn.remote_address(), %alpn, "accepting");
 
 		// Wait for the QUIC connection to be established.
 		let conn = conn.await.context("failed to establish QUIC connection")?;
@@ -140,7 +142,7 @@ impl Server {
 		let session = match alpn.as_bytes() {
 			web_transport::quinn::ALPN => {
 				// Wait for the CONNECT request.
-				let request = web_transport::quinn::accept(conn)
+				let request = web_transport::quinn::Request::accept(conn)
 					.await
 					.context("failed to receive WebTransport request")?;
 
@@ -155,7 +157,7 @@ impl Server {
 			_ => anyhow::bail!("unsupported ALPN: {}", alpn),
 		};
 
-		Ok(session.into())
+		Ok(session)
 	}
 
 	pub fn local_addr(&self) -> anyhow::Result<net::SocketAddr> {
@@ -171,23 +173,8 @@ pub struct Client {
 }
 
 impl Client {
-	pub async fn connect(&self, url: &Url) -> anyhow::Result<web_transport::Session> {
+	pub async fn connect(&self, mut url: Url) -> anyhow::Result<web_transport_quinn::Session> {
 		let mut config = self.config.clone();
-
-		let alpn = match url.scheme() {
-			"https" => web_transport::quinn::ALPN,
-			"moqf" => moq_transfork::ALPN,
-			_ => anyhow::bail!("url scheme must be 'https' or 'moqf'"),
-		};
-
-		// TODO support connecting to both ALPNs at the same time
-		config.alpn_protocols = vec![alpn.to_vec()];
-
-		config.key_log = Arc::new(rustls::KeyLogFile::new());
-
-		let config: quinn::crypto::rustls::QuicClientConfig = config.try_into()?;
-		let mut config = quinn::ClientConfig::new(Arc::new(config));
-		config.transport_config(self.transport.clone());
 
 		let host = url.host().context("invalid DNS name")?.to_string();
 		let port = url.port().unwrap_or(443);
@@ -199,17 +186,53 @@ impl Client {
 			.next()
 			.context("no DNS entries")?;
 
+		if url.scheme() == "http" {
+			// Perform a HTTP request to fetch the certificate fingerprint.
+			let mut fingerprint = url.clone();
+			fingerprint.set_path("/fingerprint");
+
+			tracing::warn!(url = %fingerprint, "performing insecure HTTP request for certificate");
+
+			let resp = reqwest::get(fingerprint.as_str())
+				.await
+				.context("failed to fetch fingerprint")?
+				.error_for_status()
+				.context("fingerprint request failed")?;
+
+			let fingerprint = resp.text().await.context("failed to read fingerprint")?;
+			let fingerprint = hex::decode(fingerprint.trim()).context("invalid fingerprint")?;
+
+			let verifier = tls::FingerprintVerifier::new(config.crypto_provider().clone(), fingerprint);
+			config.dangerous().set_certificate_verifier(Arc::new(verifier));
+
+			url.set_scheme("https").expect("failed to set scheme");
+		}
+
+		let alpn = match url.scheme() {
+			"https" => web_transport::quinn::ALPN,
+			"moqf" => moq_transfork::ALPN,
+			_ => anyhow::bail!("url scheme must be 'http', 'https', or 'moqf'"),
+		};
+
+		// TODO support connecting to both ALPNs at the same time
+		config.alpn_protocols = vec![alpn.to_vec()];
+		config.key_log = Arc::new(rustls::KeyLogFile::new());
+
+		let config: quinn::crypto::rustls::QuicClientConfig = config.try_into()?;
+		let mut config = quinn::ClientConfig::new(Arc::new(config));
+		config.transport_config(self.transport.clone());
+
 		tracing::debug!(%url, %ip, alpn = %String::from_utf8_lossy(alpn), "connecting");
 
 		let connection = self.quic.connect_with(config, ip, &host)?.await?;
 		tracing::Span::current().record("id", connection.stable_id());
 
 		let session = match url.scheme() {
-			"https" => web_transport::quinn::Session::connect(connection, url).await?,
+			"https" => web_transport::quinn::Session::connect(connection, &url).await?,
 			"moqf" => connection.into(),
 			_ => unreachable!(),
 		};
 
-		Ok(session.into())
+		Ok(session)
 	}
 }

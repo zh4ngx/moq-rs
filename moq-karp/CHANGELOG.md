@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/kixelated/moq-rs/compare/moq-karp-v0.12.2...moq-karp-v0.13.0) - 2025-01-30
+
+### Other
+
+- Misc fixes and changes. ([#317](https://github.com/kixelated/moq-rs/pull/317))
+- Plane UI work ([#316](https://github.com/kixelated/moq-rs/pull/316))
+
+## [0.12.2](https://github.com/kixelated/moq-rs/compare/moq-karp-v0.12.1...moq-karp-v0.12.2) - 2025-01-24
+
+### Other
+
+- Remove group expires. ([#303](https://github.com/kixelated/moq-rs/pull/303))
+- Add initial <moq-meet> element ([#302](https://github.com/kixelated/moq-rs/pull/302))
+
+## [0.12.0](https://github.com/kixelated/moq-rs/compare/moq-karp-v0.11.3...moq-karp-v0.12.0) - 2025-01-16
+
+### Other
+
+- Support fetching fingerprint via native clients. ([#286](https://github.com/kixelated/moq-rs/pull/286))
+- Initial WASM contribute ([#283](https://github.com/kixelated/moq-rs/pull/283))
+
+## [0.11.3](https://github.com/kixelated/moq-rs/compare/moq-karp-v0.11.2...moq-karp-v0.11.3) - 2025-01-13
+
+### Other
+
+- Revert some questionable changes. ([#281](https://github.com/kixelated/moq-rs/pull/281))
+
+## [0.11.2](https://github.com/kixelated/moq-rs/compare/moq-karp-v0.11.1...moq-karp-v0.11.2) - 2025-01-13
+
+### Other
+
+- Raise the keep-alive. ([#278](https://github.com/kixelated/moq-rs/pull/278))
+
 ## [0.11.1](https://github.com/kixelated/moq-rs/compare/moq-karp-v0.11.0...moq-karp-v0.11.1) - 2024-12-12
 
 ### Other
